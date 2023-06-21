@@ -1,0 +1,250 @@
+```{r}
+library(tidyverse)
+library(rstan)
+#library(R2jags)
+library(HDInterval)
+```
+
+
+```{r}
+dengue <- read.csv("sivigila_dengue.csv", sep = ";")
+```
+
+```{r}
+for (col in names(dengue)) {
+  if (is.character(dengue[[col]])) {
+    dengue[[col]] <- factor(dengue[[col]])
+  }
+}
+```
+
+
+
+```{r}
+ayuda <- c(22:31)
+```
+
+
+```{r, echo = FALSE}
+dengue <- subset(dengue,edad_ <= 99)
+
+dengue$clas_dengue <- droplevels(replace(dengue$clas_dengue,dengue$clas_dengue == 5, "SD"))
+```
+
+```{r}
+dengue <- droplevels(subset(dengue,clas_dengue != "SD"))
+```
+
+```{r}
+dengue[,20] <- str_replace_all(dengue[,20], "3", "2")
+```
+
+```{r}
+columnas_categoricas <- names(dengue)[sapply(dengue, is.factor)]
+
+for (col in columnas_categoricas) {
+  dengue <- subset(dengue, dengue[, col] != "SD")
+  dengue[, col] <- droplevels(dengue[, col])
+}
+```
+
+
+
+```{r}
+for (i in ayuda){
+  dengue <- subset(dengue,dengue[,i] != "SD")
+  dengue[,i] <- droplevels(dengue[,i])
+}
+```
+
+
+
+```{r}
+ayuda <- c(27:31)
+dengue <- dengue[1:1000,]
+
+resultados_lista <- list()
+
+for (i in ayuda) {
+  print(names(dengue)[i])
+  # Tabla de contingencia entre las variables 
+tabla_contingencia <- table(dengue$clas_dengue, dengue[,i])
+
+# Prueba de independencia (chi-cuadrado)
+resultado <- chisq.test(tabla_contingencia)
+
+print(resultado)
+}
+```
+
+
+
+```{r}
+dengue2 <- dengue
+```
+
+```{r}
+for (i in ayuda){
+  dengue2[,i] <- as.integer(dengue2[,i])
+  dengue2[,i] <- ifelse(dengue2[,i] == 1, 0, 1)
+}
+
+dengue2$clas_dengue <- as.integer(dengue2$clas_dengue)
+dengue2$clas_dengue <- ifelse(dengue2$clas_dengue == 1, 0, 1)
+```
+
+```{r}
+y <- dengue2$clas_dengue
+x1 <- as.factor(dengue2[,ayuda[1]])
+x2 <- as.factor(dengue2[,ayuda[2]])
+x3 <- as.factor(dengue2[,ayuda[3]])
+x4 <- as.factor(dengue2[,ayuda[4]])
+x5 <- as.factor(dengue2[,ayuda[5]])
+```
+
+
+# DENGUE SINTOMAS COMUNES
+
+```{r}
+X <- model.matrix(~x1 + x2 + x3 + x4 + x5)
+ 
+ stan_data <- list(
+  
+  "X" = X,
+  
+  "y" = y,
+  
+  "N" = nrow(dengue2), # Numero de observaciones
+  "p" = ncol(X) # numero de variables
+)
+
+  
+ fit <- stan(file = 'Parte.stan', data = stan_data, chains = 3, iter = 14000,warmup = 3000, thin = 1)
+ 
+```
+
+# HDI para los coeficientes
+
+```{r}
+Beta.poste <- as.data.frame(fit, "beta")
+
+jpeg("Graficos1/HDI/unido.jpg", width = 800, height = 600)
+par(mfrow = c(2,3))
+
+for(i in 1:dim(Beta.poste)[2]){
+  #Inicio
+  HDI.interval.beta <- hdi(Beta.poste[,i])
+  value1 <- HDI.interval.beta[1]
+  value2 <- HDI.interval.beta[2]
+  DENSITITY.BETA <- density(Beta.poste[,i])
+  plot(DENSITITY.BETA, main = "Densidad Posterior", xlab = parse(text=(paste0("beta[",i,"]"))))
+  DENSITITY.BETAy <- DENSITITY.BETA$y
+  DENSITITY.BETAx <- DENSITITY.BETA$x
+  # Lower and higher indices on the X-axis
+  l <- min(which(DENSITITY.BETAx >= value1))
+  h <- max(which(DENSITITY.BETAx < value2))
+  
+  polygon(c(DENSITITY.BETAx[c(l, l:h, h)]),
+          c(0, DENSITITY.BETAy[l:h], 0),
+          col = "slateblue1")
+  #Fin
+}
+dev.off()
+```
+
+# Traceplots
+
+```{r}
+jpeg("Graficos1/TRACEPLOT/traceplot.jpg", width = 800, height = 600)
+traceplot(fit)
+dev.off()
+```
+
+
+# ACF
+
+```{r}
+betas = extract(fit, pars = "beta")
+
+jpeg("Graficos1/ACF/unido.jpg", width = 800, height = 600)
+par(mfrow = c(2,3))
+
+acf(betas[[1]][,1])
+acf(betas[[1]][,2])
+acf(betas[[1]][,3])
+acf(betas[[1]][,4])
+acf(betas[[1]][,5])
+acf(betas[[1]][,6])
+dev.off()
+  
+```
+
+#GRAFICO DE LA DENSIDAD POSTERIOR
+
+```{r}
+jpeg("Graficos1/DENSIDAD/unido.jpg", width = 800, height = 600)
+par(mfrow = c(2,3))
+plot(density(betas[[1]][,1]))
+plot(density(betas[[1]][,2]))
+plot(density(betas[[1]][,3]))
+plot(density(betas[[1]][,4]))
+plot(density(betas[[1]][,5]))
+plot(density(betas[[1]][,6]))
+dev.off()
+ 
+```
+
+
+
+```{r}
+library(pROC)
+# Obtener los coeficientes del modelo
+# Extraer los coeficientes del modelo
+# Extraer las muestras generadas
+samples <- extract(fit)
+# Calcular la media de las muestras
+# Convertir el vector en una matriz de una columna
+media_coeficientes <- colMeans(samples$beta)
+coeficientes <- matrix(media_coeficientes, ncol = 1)
+
+
+
+
+
+
+
+# Obtener la matriz de diseño X
+X8 <- model.matrix(y ~ x1 + x2 + x3 + x4 + x5, data = dengue2)
+
+# Calcular las probabilidades predichas
+predicciones <- plogis(X8 %*% coeficientes)
+
+# Calcular la curva ROC
+curva_roc <- roc(y, predicciones)
+```
+
+```{r}
+auc(curva_roc)
+```
+
+
+```{r}
+jpeg("Graficos1/ROC/curva.jpg", width = 800, height = 600)
+plot(curva_roc,main = "Modelo 1")
+dev.off()
+```
+
+
+```{r}
+library(loo)
+# Cálculo de las estimaciones LOO
+loo1 <- loo(fit)
+loo2 <- loo(fit2)
+
+# Comparación de los modelos
+compare_models <- loo_compare(loo1, loo2)
+
+# Resumen de la comparación
+print(compare_models)
+```
+
